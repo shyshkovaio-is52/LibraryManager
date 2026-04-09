@@ -3,8 +3,9 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
-using System.IO;          
-using System.Text.Json;     
+using System.IO;
+using System.Text.Json;
+using System.ComponentModel.DataAnnotations;
 
 namespace LibraryManager
 {
@@ -13,14 +14,21 @@ namespace LibraryManager
     public class Book
     {
         public int Id { get; set; }
+
+        [Required(ErrorMessage = "Назва книги обов'язкова!")]
+        [StringLength(100, MinimumLength = 2, ErrorMessage = "Назва має бути від 2 до 100 символів.")]
         public string Title { get; set; }
+
+        [Required(ErrorMessage = "Вкажіть автора книги!")]
         public string Author { get; set; }
+
         public BookStatus Status { get; set; }
 
+        public Book() { }
         public Book(int id, string title, string author)
         {
-            Id = id;
-            Title = title;
+            Id = id; 
+            Title = title; 
             Author = author;
             Status = BookStatus.Available;
         }
@@ -28,11 +36,18 @@ namespace LibraryManager
 
     public class Reader
     {
+        [Range(1, 99999, ErrorMessage = "Номер квитка має бути числом від 1 до 99999.")]
         public int TicketNumber { get; set; }
+
+        [Required(ErrorMessage = "ПІБ читача не може бути порожнім.")]
+        [RegularExpression(@"^[a-zA-Zа-яА-ЯіІїЇєЄ\s\-]+$", ErrorMessage = "ПІБ має містити лише літери.")]
         public string FullName { get; set; }
+
+        public int CurrentBorrowedBookId { get; set; } = -1;
+
         public Reader() { }
         public Reader(int ticket, string name) { TicketNumber = ticket; FullName = name; }
-        public bool CanBorrow() => true;
+        public bool CanBorrow() => CurrentBorrowedBookId == -1;
     }
 
     public class Repository<T>
@@ -64,8 +79,8 @@ namespace LibraryManager
         private const string BooksFile = "books.json";
         private const string ReadersFile = "readers.json";
 
-        private DataGridView dgvBooks = new DataGridView { Location = new Point(20, 30), Size = new Size(450, 100), SelectionMode = DataGridViewSelectionMode.FullRowSelect, ReadOnly = true };
-        private DataGridView dgvReaders = new DataGridView { Location = new Point(20, 160), Size = new Size(450, 100), SelectionMode = DataGridViewSelectionMode.FullRowSelect, ReadOnly = true };
+        private DataGridView dgvBooks = new DataGridView { Location = new Point(20, 30), Size = new Size(450, 100), SelectionMode = DataGridViewSelectionMode.FullRowSelect, ReadOnly = true, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill };
+        private DataGridView dgvReaders = new DataGridView { Location = new Point(20, 160), Size = new Size(450, 100), SelectionMode = DataGridViewSelectionMode.FullRowSelect, ReadOnly = true, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill };
         private Label lblInfo = new Label { Text = "Назва/ПІБ | Автор/№Квитка:", Location = new Point(20, 290), AutoSize = true };
         private TextBox txtName = new TextBox { Location = new Point(20, 310), Width = 150 };
         private TextBox txtExtra = new TextBox { Location = new Point(180, 310), Width = 150 };
@@ -79,25 +94,25 @@ namespace LibraryManager
         public MainForm()
         {
             this.Size = new Size(510, 550);
-            this.Text = "Library Manager";
+            this.Text = "Library System";
             this.StartPosition = FormStartPosition.CenterScreen;
 
-            LoadData();
-
-            if (!_bookRepo.GetAll().Any())
-            {
-                _bookRepo.Add(new Book(1, "Гаррі Поттер", "Джоан Роулінг"));
-                _bookRepo.Add(new Book(2, "Віднесені вітром", "Марґарет Мітчелл"));
-            }
-
-            if (!_readerRepo.GetAll().Any())
-            {
-                _readerRepo.Add(new Reader(88, "Олександр Донець"));
-            }
-
+            LoadData(); 
             SetupEvents();
             this.Controls.AddRange(new Control[] { dgvBooks, dgvReaders, lblInfo, txtName, txtExtra, btnAddBook, btnAddReader, btnEdit, btnDelete, btnReturn, btnIssue });
             RefreshData();
+        }
+
+        private bool ValidateEntity(object obj)
+        {
+            var results = new List<ValidationResult>();
+            var context = new ValidationContext(obj);
+            if (!Validator.TryValidateObject(obj, context, results, true))
+            {
+                MessageBox.Show(results[0].ErrorMessage, "Помилка валідації", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+            return true;
         }
 
         private void SaveData()
@@ -105,13 +120,13 @@ namespace LibraryManager
             try
             {
                 var options = new JsonSerializerOptions { WriteIndented = true };
-                string booksJson = JsonSerializer.Serialize(_bookRepo.GetAll(), options);
-                string readersJson = JsonSerializer.Serialize(_readerRepo.GetAll(), options);
-
-                File.WriteAllText(BooksFile, booksJson);
-                File.WriteAllText(ReadersFile, readersJson);
+                File.WriteAllText(BooksFile, JsonSerializer.Serialize(_bookRepo.GetAll(), options));
+                File.WriteAllText(ReadersFile, JsonSerializer.Serialize(_readerRepo.GetAll(), options));
             }
-            catch (Exception ex) { MessageBox.Show("Помилка збереження: " + ex.Message); }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Помилка при збереженні файлів: " + ex.Message, "Помилка IO", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void LoadData()
@@ -132,7 +147,14 @@ namespace LibraryManager
                     if (readers != null) foreach (var r in readers) _readerRepo.Add(r);
                 }
             }
-            catch (Exception ex) { MessageBox.Show("Помилка завантаження: " + ex.Message); }
+            catch (JsonException)
+            {
+                MessageBox.Show("Файл бази даних має неправильний формат або пошкоджений!", "Помилка JSON", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Критична помилка при завантаженні: " + ex.Message, "Помилка", MessageBoxButtons.OK, MessageBoxIcon.Stop);
+            }
         }
 
         private void SetupEvents()
@@ -140,104 +162,103 @@ namespace LibraryManager
             dgvBooks.Enter += (s, e) => _lastActiveTable = dgvBooks;
             dgvReaders.Enter += (s, e) => _lastActiveTable = dgvReaders;
 
-            dgvBooks.CellClick += (s, e) => {
-                if (dgvBooks.SelectedRows.Count > 0)
-                {
-                    txtName.Text = dgvBooks.SelectedRows[0].Cells["Title"].Value?.ToString();
-                    txtExtra.Text = dgvBooks.SelectedRows[0].Cells["Author"].Value?.ToString();
-                }
-            };
-
-            dgvReaders.CellClick += (s, e) => {
-                if (dgvReaders.SelectedRows.Count > 0)
-                {
-                    txtName.Text = dgvReaders.SelectedRows[0].Cells["FullName"].Value?.ToString();
-                    txtExtra.Text = dgvReaders.SelectedRows[0].Cells["TicketNumber"].Value?.ToString();
-                }
-            };
-
-            btnEdit.Click += (s, e) => {
-                if (_lastActiveTable == dgvBooks && dgvBooks.SelectedRows.Count > 0)
-                {
-                    int id = (int)dgvBooks.SelectedRows[0].Cells["Id"].Value;
-                    Book b = _bookRepo.GetById(id);
-                    if (b != null) { b.Title = txtName.Text; b.Author = txtExtra.Text; }
-                }
-                else if (_lastActiveTable == dgvReaders && dgvReaders.SelectedRows.Count > 0)
-                {
-                    int id = (int)dgvReaders.SelectedRows[0].Cells["TicketNumber"].Value;
-                    Reader r = _readerRepo.GetById(id);
-                    if (r != null) { r.FullName = txtName.Text; }
-                }
-                RefreshData();
-            };
-
-            btnDelete.Click += (s, e) => {
-                if (_lastActiveTable == dgvBooks && dgvBooks.SelectedRows.Count > 0)
-                    _bookRepo.Remove((int)dgvBooks.SelectedRows[0].Cells["Id"].Value);
-                else if (_lastActiveTable == dgvReaders && dgvReaders.SelectedRows.Count > 0)
-                    _readerRepo.Remove((int)dgvReaders.SelectedRows[0].Cells["TicketNumber"].Value);
-                RefreshData();
-            };
-
             btnAddBook.Click += (s, e) => {
+                string title = txtName.Text.Trim();
+                string author = txtExtra.Text.Trim();
+                if (_bookRepo.GetAll().Any(b => b.Title.Equals(title, StringComparison.OrdinalIgnoreCase) && b.Author.Equals(author, StringComparison.OrdinalIgnoreCase)))
+                {
+                    if (MessageBox.Show("Така книга вже є. Додати ще примірник?", "Дублікат", MessageBoxButtons.YesNo) == DialogResult.No) return;
+                }
                 int newId = _bookRepo.GetAll().Any() ? _bookRepo.GetAll().Max(b => b.Id) + 1 : 1;
-                _bookRepo.Add(new Book(newId, txtName.Text, txtExtra.Text));
-                RefreshData();
+                Book book = new Book(newId, title, author);
+                if (ValidateEntity(book)) 
+                { _bookRepo.Add(book); 
+                    RefreshData(); }
             };
 
             btnAddReader.Click += (s, e) => {
                 if (int.TryParse(txtExtra.Text, out int ticket))
                 {
-                    _readerRepo.Add(new Reader(ticket, txtName.Text));
-                    RefreshData();
-                }
-                else MessageBox.Show("Введіть число в поле №Квитка!");
-            };
-            btnReturn.Click += (s, e) => {
-                if (dgvBooks.SelectedRows.Count > 0)
-                {
-                  
-                    int id = (int)dgvBooks.SelectedRows[0].Cells["Id"].Value;
-                    Book book = _bookRepo.GetById(id);
-
-                  
-                    if (book.Status == BookStatus.Borrowed)
+                    if (_readerRepo.GetAll().Any(r => r.TicketNumber == ticket))
                     {
-                        book.Status = BookStatus.Available;
-                        MessageBox.Show($"Книгу '{book.Title}' успішно повернуто!");
-                        RefreshData();
+                        MessageBox.Show("Цей номер квитка вже зареєстрований за іншим читачем!", "Дублікат", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        return;
                     }
-                    else
-                    {
-                        MessageBox.Show("Ця книга і так знаходиться в бібліотеці.");
-                    }
+                    Reader reader = new Reader(ticket, txtName.Text);
+                    if (ValidateEntity(reader)) 
+                    { _readerRepo.Add(reader); 
+                        RefreshData(); }
                 }
+                else MessageBox.Show("Номер квитка має бути цілим числом", "Помилка вводу", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             };
-
 
             btnIssue.Click += (s, e) => {
                 if (dgvBooks.SelectedRows.Count > 0 && dgvReaders.SelectedRows.Count > 0)
                 {
                     Book book = _bookRepo.GetById((int)dgvBooks.SelectedRows[0].Cells["Id"].Value);
-                    if (book.Status == BookStatus.Available)
+                    Reader reader = _readerRepo.GetById((int)dgvReaders.SelectedRows[0].Cells["TicketNumber"].Value);
+                    if (book.Status != BookStatus.Available) MessageBox.Show("Ця книга зараз недоступна!");
+                    else if (!reader.CanBorrow()) MessageBox.Show("У цього читача вже є книга на руках!");
+                    else
                     {
                         book.Status = BookStatus.Borrowed;
-                        MessageBox.Show("Успішно видано!");
+                        reader.CurrentBorrowedBookId = book.Id;
+                        MessageBox.Show($"Книгу успішно видано читачу: {reader.FullName}");
                         RefreshData();
                     }
-                    else MessageBox.Show("Ця книга вже видана або в архіві");
                 }
+            };
+
+            btnReturn.Click += (s, e) => {
+                if (dgvBooks.SelectedRows.Count > 0)
+                {
+                    Book book = _bookRepo.GetById((int)dgvBooks.SelectedRows[0].Cells["Id"].Value);
+                    if (book.Status == BookStatus.Borrowed)
+                    {
+                        var reader = _readerRepo.GetAll().FirstOrDefault(r => r.CurrentBorrowedBookId == book.Id);
+                        if (reader != null) reader.CurrentBorrowedBookId = -1;
+                        book.Status = BookStatus.Available;
+                        MessageBox.Show("Книгу повернуто до бібліотеки.");
+                        RefreshData();
+                    }
+                    else MessageBox.Show("Ця книга не була видана.");
+                }
+            };
+
+            btnDelete.Click += (s, e) => {
+                if (_lastActiveTable == dgvBooks && dgvBooks.SelectedRows.Count > 0)
+                {
+                    int id = (int)dgvBooks.SelectedRows[0].Cells["Id"].Value;
+                    if (_bookRepo.GetById(id).Status == BookStatus.Borrowed)
+                    {
+                        MessageBox.Show("Неможливо видалити книгу, яка зараз видана читачу!", "Заборонено", MessageBoxButtons.OK, MessageBoxIcon.Stop);
+                        return;
+                    }
+                    _bookRepo.Remove(id);
+                }
+                else if (_lastActiveTable == dgvReaders && dgvReaders.SelectedRows.Count > 0)
+                {
+                    int ticket = (int)dgvReaders.SelectedRows[0].Cells["TicketNumber"].Value;
+                    if (!_readerRepo.GetById(ticket).CanBorrow())
+                    {
+                        MessageBox.Show("Неможливо видалити читача, поки він не поверне книгу!", "Заборонено", MessageBoxButtons.OK, MessageBoxIcon.Stop);
+                        return;
+                    }
+                    _readerRepo.Remove(ticket);
+                }
+                RefreshData();
             };
         }
 
-        
         private void RefreshData()
         {
-            dgvBooks.DataSource = null;
+            dgvBooks.DataSource = null; 
             dgvBooks.DataSource = _bookRepo.GetAll().ToList();
-            dgvReaders.DataSource = null;
+            dgvReaders.DataSource = null; 
             dgvReaders.DataSource = _readerRepo.GetAll().ToList();
+
+            if (dgvReaders.Columns["CurrentBorrowedBookId"] != null)
+                dgvReaders.Columns["CurrentBorrowedBookId"].Visible = false;
 
             SaveData();
         }
